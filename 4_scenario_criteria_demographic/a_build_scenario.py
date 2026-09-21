@@ -1,16 +1,4 @@
 """Build the psychscanner task JSON for AUD scenario generation.
-
-Reads the 99-row atomic stimulus file (crit | demo | prompt) and produces:
-  1. aud_scenario_gen_task.json  - psychscanner task file with 990 trials
-     (99 seeds x 10 instances; severity schedule: 3 low, 4 medium, 3 high)
-  2. aud_scenario_gen_mapping.csv - sidecar mapping trcode -> crit, demo,
-     severity, instance, description (for merging with output CSV later)
-
-The task JSON mirrors the structure of psychscanner's examples/tasks/vviq16.json:
-top-level keys tasktype, taskname, instructions, contexts, contexts_id,
-context_present, items, parser, chain_type. Each item is {trid: [{trcode, stimulus}]}.
-psychscanner looks up trcode.split("_")[0] in contexts_id unconditionally,
-so every trcode is prefixed "G_" and contexts_id is ["G"].
 """
 import json
 import re
@@ -21,11 +9,8 @@ SHEET = "crit_demo"
 OUT_JSON = "aud_scenario_gen_task.json"
 OUT_MAP = "aud_scenario_gen_mapping.csv"
 
-# Severity schedule: identical for every seed. Instances 1-10 are medium.
 SEVERITY_SCHEDULE = ["medium"] * 10
 
-# Final approved instruction wording (Version 1, names allowed).
-# {a_an} resolves to "a" or "an"; {description} is the row's prompt text;
 INSTRUCTION_TEMPLATE = (
     "Write a short case-study vignette of exactly 3 to 4 sentences describing {a_an} {description}. Follow these rules: "
     "(1) depict only this one alcohol-related symptom, shown at a medium level of intensity or frequency; "
@@ -50,7 +35,6 @@ def main() -> None:
     for _, row in df.iterrows():
         crit, demo, desc = row["crit"], row["demo"], row["prompt"]
         for i, severity in enumerate(SEVERITY_SCHEDULE, start=1):
-            # trcode encodes all metadata; prefix G satisfies context lookup.
             trcode = f"G_{crit}-{demo}-{severity}-{i:02d}"
             stimulus = INSTRUCTION_TEMPLATE.format(
                 a_an=a_or_an(desc), description=desc, severity=severity
@@ -84,10 +68,5 @@ def main() -> None:
 
     print(f"Wrote {OUT_JSON}: {len(items)} trials")
     print(f"Wrote {OUT_MAP}: {len(mapping_rows)} mapping rows")
-    # Show one example of each severity level for eyeballing
-    for code in ["G_C1-D1-medium-01", "G_C1-D9-medium-05", "G_C5-D7-medium-10"]:
-        print("\n---", code)
-        print(items[code][0]["stimulus"])
-
 if __name__ == "__main__":
     main()
