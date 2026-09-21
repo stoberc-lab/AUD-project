@@ -9,7 +9,6 @@ import pandas as pd
 from tqdm import tqdm
 
 from openai import OpenAI
-# Transient error types we will retry on (rate limits, timeouts, transient 5xx).
 from openai import (
     RateLimitError,
     APITimeoutError,
@@ -20,63 +19,32 @@ from openai import (
 # ----------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------
-MODEL_ID  = "gpt-5.5"   # Pinned dated snapshot for a frozen, reproducible
-                                   # run. Change to "gpt-5.5" only if you want the
-                                   # moving alias (not recommended mid-study).
-MODEL_TAG = "gpt-5.5"              # Used only for the output folder / filename / CSV "model".
-
-# TEST_NAME matches the Llama demo arm so both models land under the same test
-# folder: outputs/<TEST_NAME>/gpt-5.5/ next to outputs/<TEST_NAME>/llama-2-70b-hf/.
+MODEL_ID  = "gpt-5.5"                          
+MODEL_TAG = "gpt-5.5"             
 TEST_NAME = "demo_first_token_1and2"
 
-INPUT_XLSX  = "AUD_demographic_pairwise_counterbalanced_1and2.xlsx"   # number-format file
+INPUT_XLSX  = "AUD_demographic_pairwise_counterbalanced_1and2.xlsx"  
 INPUT_SHEET = "AUD_demographic_pairwise"
 
 OUTPUT_DIR = Path(f"outputs/{TEST_NAME}/{MODEL_TAG}")
 OUTPUT_CSV = OUTPUT_DIR / f"{MODEL_TAG}_results.csv"
 
-# The two answer surface forms we are scoring. These match the "1"/"2" labels in
-# the prompts. To score an A/B-labeled workbook instead, change these to "A"/"B"
-# and point INPUT_XLSX at the letter workbook (label mismatch produces near-zero
-# answer mass and NaN probabilities, so keep these in sync with the prompt text).
 LEFT_LABEL  = "1"
 RIGHT_LABEL = "2"
 
-# How many alternative tokens to request at the answer position. 20 is the
-# current OpenAI maximum for top_logprobs on the chat completions endpoint.
 TOP_LOGPROBS = 5
 
-# Token budget for the completion. We only read the FIRST visible token's
-# logprobs, but GPT-5.5 is a reasoning model that can spend hidden reasoning
-# tokens before emitting a visible token. A small buffer (not 1) protects
-# against the whole budget being consumed by reasoning and returning no visible
-# token / no logprobs. With REASONING_EFFORT="none" below, reasoning is
-# suppressed, so 16 is plenty.
-MAX_COMPLETION_TOKENS = 16
+MAX_COMPLETION_TOKENS = 10
 
-# Optional generation controls. Set any of these to None to omit that parameter
-# entirely if the model rejects it.
-TEMPERATURE      = None    # None -> API default. GPT-5.x reasoning models
-                           # generally reject a custom temperature, so leave None.
-SEED             = 12345   # Best-effort run-to-run stability; OpenAI does not
-                           # guarantee determinism even with a seed. None to omit.
-REASONING_EFFORT = "none"  # GPT-5.5 defaults to "medium" reasoning. We set "none"
-                           # for two reasons: (1) medium reasoning would consume the
-                           # small token budget and return no visible token (all
-                           # rows NaN); (2) scoring the first token AFTER hidden
-                           # chain-of-thought is a different quantity than the raw
-                           # next-token distribution used in the Llama arm. "none"
-                           # keeps the two arms as comparable as an API allows.
-                           # NOTE: "none" is a GPT-5.5 value; older GPT-5 used
-                           # "minimal". Set to None to omit the parameter entirely.
+TEMPERATURE      = None    
+SEED             = 12345   
+REASONING_EFFORT = "none"  
 
-# Simple retry policy for transient API errors.
 MAX_RETRIES   = 5
-RETRY_BACKOFF = 2.0   # base seconds; the wait doubles each attempt.
+RETRY_BACKOFF = 2.0  
 
 # ----------------------------------------------------------------------------
-# API key: read from a file first (mirrors the .hf_access_token pattern used by
-# the open-model scripts), then fall back to the OPENAI_API_KEY env variable.
+# API key: read from a file 
 # ----------------------------------------------------------------------------
 def load_api_key():
     for path in (".openai_access_token", os.path.expanduser("~/.openai_access_token")):
@@ -102,13 +70,11 @@ client = OpenAI(api_key=API_KEY)
 # One API call, with retry on transient errors only.
 # ----------------------------------------------------------------------------
 def call_model(prompt_text):
-    # Assemble the request. Optional params are only included when not None, so a
-    # model that rejects one of them still works once you set that constant to None.
     params = {
         "model": MODEL_ID,
         "messages": [{"role": "user", "content": prompt_text}],
-        "logprobs": True,               # ask for token log-probabilities
-        "top_logprobs": TOP_LOGPROBS,   # ask for the top-N alternatives per token
+        "logprobs": True,              
+        "top_logprobs": TOP_LOGPROBS,   
         "max_completion_tokens": MAX_COMPLETION_TOKENS,
     }
     if TEMPERATURE is not None:
@@ -117,9 +83,6 @@ def call_model(prompt_text):
         params["seed"] = SEED
     if REASONING_EFFORT is not None:
         params["reasoning_effort"] = REASONING_EFFORT
-
-    # Retry only on transient errors; hard errors (bad params, auth, "logprobs
-    # not allowed") surface immediately so you can fix them rather than looping.
     attempt = 0
     while True:
         try:
@@ -137,27 +100,16 @@ def call_model(prompt_text):
 # ----------------------------------------------------------------------------
 def answer_distribution(response):
     choice = response.choices[0]
-
-    # Guard: the model must have returned token-level logprobs. If logprobs came
-    # back null (unsupported model) or no visible token was emitted (budget eaten
-    # by reasoning), we cannot score this row; return NaN so it is flagged.
     if choice.logprobs is None or not choice.logprobs.content:
         return float("nan"), float("nan"), []
 
     first_token = choice.logprobs.content[0]
 
-    # Build {token_string: logprob} for the first generated position.
-    # top_logprobs holds the top-N alternatives; the sampled token is normally
-    # among them, but we add it explicitly if missing so no mass is dropped.
     dist = {}
     for alt in first_token.top_logprobs:
         dist[alt.token] = alt.logprob
     if first_token.token not in dist:
         dist[first_token.token] = first_token.logprob
-
-    # Sum probability over every surface form of each answer. OpenAI often splits
-    # a numeric answer across variants such as "1" and " 1", so we compare on the
-    # stripped token text rather than requiring an exact-token match.
     p_left = 0.0
     p_right = 0.0
     for token_str, logprob in dist.items():
@@ -167,8 +119,6 @@ def answer_distribution(response):
         elif stripped == RIGHT_LABEL:
             p_right += math.exp(logprob)
 
-    # Diagnostic: top tokens by probability, mirroring the Llama script's
-    # raw_response column so both arms are inspectable the same way.
     top_tokens = sorted(
         ((tok, math.exp(lp)) for tok, lp in dist.items()),
         key=lambda x: x[1],
@@ -181,8 +131,9 @@ def format_raw_response(top_tokens):
     return "; ".join(parts)
 
 # ----------------------------------------------------------------------------
-# Main execution loop (resume-safe; identical CSV schema to the Llama demo arm).
+# Main execution loop 
 # ----------------------------------------------------------------------------
+
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Resume support: skip any task_id already present in the output CSV.
@@ -190,10 +141,6 @@ already_done = set()
 if OUTPUT_CSV.exists():
     prior = pd.read_csv(OUTPUT_CSV, dtype=str)
     already_done = set(prior["task_id"].tolist())
-
-# Column schema copied verbatim from demo_llama2_prob_mass.py so the two model
-# arms are concatenation-compatible. (comparison_form is intentionally not
-# emitted, matching the Llama arm; it is constant "demo_only" in this workbook.)
 CSV_COLUMNS = [
     "model", "task_id", "task_type",
     "left_demo", "right_demo",
@@ -230,8 +177,6 @@ for _, task in tqdm(tasks.iterrows(), total=len(tasks)):
             right_probability = p_right / answer_mass
         else:
             left_probability = right_probability = float("nan")
-
-    # Quality flag surfaced during the run so bad rows are noticed immediately.
     if math.isnan(answer_mass):
         print(f"  [WARN] {task['task_id']}: no usable logprobs returned.")
     elif answer_mass < 0.5:
