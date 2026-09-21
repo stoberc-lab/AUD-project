@@ -35,7 +35,7 @@ except FileNotFoundError:
 # ----------------------------------------------------------------------------
 # Load the model and tokenizer
 # ----------------------------------------------------------------------------
-CACHE_PATH = "/mnt/pixstor/stoberc-lab/huggingface_cache/hub"
+CACHE_PATH = " "
 
 print(f"Loading tokenizer for {MODEL_ID} ...")
 tokenizer = AutoTokenizer.from_pretrained(
@@ -59,9 +59,6 @@ model.eval()
 # ----------------------------------------------------------------------------
 # Precompute "1" and "2" answer token IDs
 # ----------------------------------------------------------------------------
-# Scans the full vocabulary for every token whose decoded, stripped surface form
-# is exactly the answer label, so probability mass split across variants (e.g.
-# "1" vs " 1") is captured in full.
 def collect_answer_token_ids(label):
     ids = []
     for token_id in range(len(tokenizer)):
@@ -109,8 +106,6 @@ if OUTPUT_CSV.exists():
     prior = pd.read_csv(OUTPUT_CSV, dtype=str)
     already_done = set(prior["task_id"].tolist())
 
-# Same schema as the crit_demo arm, extended with the vignette-tracing columns
-# (base_task_id, left_trcode, right_trcode, instance) unique to this arm.
 CSV_COLUMNS = [
     "model", "task_id", "base_task_id", "task_type",
     "left_crit", "left_demo", "right_crit", "right_demo",
