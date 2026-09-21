@@ -1,23 +1,6 @@
 """
 test_validation_meditron.py
 
-Phase C vignette validation runner for Meditron-70B (base model).
-
-Task: for each row of AUD_vignette_validation_10orders.xlsx, present the
-vignette with 12 lettered options (11 AUD criteria + "None of the above",
-in one of 10 seeded random orderings) and ask which option best matches.
-
-Measurement is TEXT GENERATION (greedy decoding), not probability mass:
-validation is a classification accuracy check where only the modal choice
-matters, unlike the graded pairwise preference arms. The first-token top-5
-distribution is still recorded per trial as a diagnostic, mirroring the
-raw_response column of the prob_mass scripts.
-
-SMOKE TEST: set SMOKE_TEST = True to run only the first vignette in the
-workbook (10 orderings = 10 trials), with prompts and raw continuations
-printed to the console, and outputs written to a separate *_smoketest
-folder so the full run's resume log is never contaminated. Set it to
-False for the full 9,900-trial run.
 """
 
 import json
@@ -36,8 +19,7 @@ from tqdm import tqdm
 MODEL_ID  = "epfl-llm/meditron-70b"
 MODEL_TAG = "meditron-70b"
 
-SMOKE_TEST = True   # True: 1 vignette x 10 orderings, verbose. False: full run.
-
+SMOKE_TEST = False   
 TEST_NAME = "vignette_validation_10orders" + ("_smoketest" if SMOKE_TEST else "")
 
 INPUT_XLSX  = "AUD_vignette_validation_10orders.xlsx"
@@ -46,13 +28,10 @@ INPUT_SHEET = "vignette_validation"
 OUTPUT_DIR = Path(f"outputs/{TEST_NAME}/{MODEL_TAG}")
 OUTPUT_CSV = OUTPUT_DIR / f"{MODEL_TAG}_results.csv"
 
-# Greedy decoding, short budget: the priming suffix inside the prompt
-# ("Answer (single letter): ") positions the very next token to be a letter,
-# and 10 new tokens leave room for trailing punctuation or a short echo.
 MAX_NEW_TOKENS = 10
 DTYPE = torch.bfloat16
 
-TOP_K = 5   # first-token diagnostic, mirroring the prob_mass scripts
+TOP_K = 5  
 
 try:
     with open(".hf_access_token", "r") as f:
@@ -63,7 +42,7 @@ except FileNotFoundError:
 # ----------------------------------------------------------------------------
 # Load the model and tokenizer
 # ----------------------------------------------------------------------------
-CACHE_PATH = "/mnt/pixstor/stoberc-lab/huggingface_cache/hub"
+CACHE_PATH = " "
 
 print(f"Loading tokenizer for {MODEL_ID} ...")
 tokenizer = AutoTokenizer.from_pretrained(
@@ -85,16 +64,9 @@ model = AutoModelForCausalLM.from_pretrained(
 model.eval()
 
 # ----------------------------------------------------------------------------
-# Generation: greedy continuation plus a first-token top-5 diagnostic.
+# Generation
 # ----------------------------------------------------------------------------
 def generate_answer(prompt_text):
-    """Greedily generate up to MAX_NEW_TOKENS after the prompt.
-
-    Returns (generated_text, top_tokens) where top_tokens is the top-5
-    (token, probability) list at the FIRST generated position. That first
-    position is exactly where the answer letter should appear, so the
-    diagnostic shows at a glance whether the model's mass sits on letters
-    (compliant) or on digits/other text (non-compliant)."""
     inputs = tokenizer(prompt_text, return_tensors="pt").to(model.device)
     input_len = inputs["input_ids"].shape[1]
 
@@ -102,18 +74,15 @@ def generate_answer(prompt_text):
         outputs = model.generate(
             **inputs,
             max_new_tokens=MAX_NEW_TOKENS,
-            do_sample=False,                 # greedy: deterministic given the prompt
+            do_sample=False,                 
             return_dict_in_generate=True,
             output_scores=True,
             pad_token_id=tokenizer.eos_token_id,
         )
 
-    # Decode only the newly generated tokens (everything after the prompt).
     gen_ids = outputs.sequences[0][input_len:]
     generated_text = tokenizer.decode(gen_ids, skip_special_tokens=True)
 
-    # First-token diagnostic: softmax over the logits of the first generated
-    # position, then take the top-5 tokens by probability.
     first_logits = outputs.scores[0][0]
     probs = torch.softmax(first_logits.float(), dim=-1)
     top_probs, top_ids = torch.topk(probs, TOP_K)
@@ -131,38 +100,21 @@ def format_raw_response(top_tokens):
 # Parsing: extract the chosen letter from the continuation.
 # ----------------------------------------------------------------------------
 def parse_letter(generated_text):
-    """Extract the answer letter (A-L, uppercase only) from the continuation.
-
-    Two-tier rule, applied in order:
-      1. "start_letter": the continuation begins with the letter, either
-         punctuated ("C.", "(I)", "K:"), standing alone ("C"), or, for
-         letters other than A and I, followed by whitespace ("C experienced
-         ..."). A and I require punctuation or standing alone because they
-         are also English words ("I think ...", "A strong ...").
-      2. "keyword_letter": fallback for prose continuations, matching an
-         uppercase letter right after "answer"/"option" (e.g. "The answer
-         is C"). The letter class is uppercase-only throughout so the
-         English words "a" and "I" inside ordinary prose cannot match.
-
-    Returns (letter or None, parse_status)."""
     text = generated_text.strip()
     if not text:
         return None, "empty"
 
-    # Tier 1a: letter followed by punctuation, e.g. "C.", "(I)", "K:", "B) ...".
+    # 1a: letter followed by punctuation, e.g. "C.", "(I)", "K:", "B) ...".
     m = re.match(r"^\(?([A-L])[\.\):,]", text)
     if m:
         return m.group(1), "start_letter"
 
-    # Tier 1b: the continuation is the bare letter and nothing else.
+    # 1b: the bare letter and nothing else.
     m = re.match(r"^\(?([A-L])\)?$", text)
     if m:
         return m.group(1), "start_letter"
 
-    # Tier 1c: bare letter followed by whitespace (e.g. "C experienced ...").
-    # "A" and "I" are excluded here because they are English words: a bare
-    # "I think ..." or "A strong ..." continuation is prose, not an answer.
-    # Punctuated forms of A and I are still caught by tier 1a.
+    # 1c: bare letter followed by whitespace (e.g. "C experienced ...").
     m = re.match(r"^([B-HJ-L])\s", text)
     if m:
         return m.group(1), "start_letter"
@@ -174,8 +126,7 @@ def parse_letter(generated_text):
     return None, "unparseable"
 
 # ----------------------------------------------------------------------------
-# Main execution loop (resume-safe; same skip/append/JSON-dump pattern as the
-# pairwise runners).
+# Main execution loop 
 # ----------------------------------------------------------------------------
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -193,7 +144,6 @@ CSV_COLUMNS = [
 
 tasks = pd.read_excel(INPUT_XLSX, sheet_name=INPUT_SHEET, dtype=str)
 
-# Smoke test: restrict to the first vignette in the workbook (its 10 orderings).
 if SMOKE_TEST:
     first_trcode = tasks["trcode"].iloc[0]
     tasks = tasks[tasks["trcode"] == first_trcode].copy()
@@ -215,8 +165,6 @@ for _, task in tqdm(tasks.iterrows(), total=len(tasks)):
     generated_text, top_tokens = generate_answer(task["prompt"])
     predicted_letter, parse_status = parse_letter(generated_text)
 
-    # Map the predicted letter back to its option code (C1-C11 or NOTA) using
-    # the per-trial letter columns baked into the workbook; no prompt re-parsing.
     if predicted_letter is not None:
         predicted_option = task[f"option_{predicted_letter}"]
         is_correct = int(predicted_letter == task["correct_letter"])
@@ -252,8 +200,6 @@ for _, task in tqdm(tasks.iterrows(), total=len(tasks)):
     with open(OUTPUT_DIR / f"{task['task_id']}.json", "w", encoding="utf-8") as jf:
         json.dump(row, jf, indent=2)
 
-    # Verbose console output for the smoke test: raw continuation plus the
-    # first-token diagnostic, so compliance is checkable at a glance.
     if SMOKE_TEST:
         print(f"\n[{task['task_id']}] ordering {task['ordering_id']} "
               f"(correct = {task['correct_letter']})")
