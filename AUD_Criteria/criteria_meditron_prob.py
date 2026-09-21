@@ -14,10 +14,8 @@ from tqdm import tqdm
 MODEL_ID   = "epfl-llm/meditron-70b"   
 MODEL_TAG  = "meditron-70b"                
 TEST_NAME  = "crit_first_token_1and2"
-# TEST_NAME = "crit_first_token_AandB"
 
-INPUT_XLSX = "AUD_crit_pairwise_counterbalanced_1and2_v2.xlsx"
-# INPUT_XLSX = "AUD_crit_pairwise_counterbalanced_AandB.xlsx"   
+INPUT_XLSX = "AUD_crit_pairwise_counterbalanced_1and2_v2.xlsx" 
 INPUT_SHEET = "crit_pairwise_counterbalanced"
 
 OUTPUT_DIR = Path(f"outputs/{TEST_NAME}/{MODEL_TAG}")    
@@ -59,7 +57,7 @@ model = AutoModelForCausalLM.from_pretrained(
 model.eval()
 
 # ----------------------------------------------------------------------------
-# Precompute "A" and "B" token IDs
+# Precompute "1" and "2" token IDs
 # ----------------------------------------------------------------------------
 def collect_answer_token_ids(letter):
     ids = []
@@ -72,8 +70,7 @@ def collect_answer_token_ids(letter):
 print("Indexing answer tokens ...")
 A_IDS = collect_answer_token_ids("1")
 B_IDS = collect_answer_token_ids("2")
-#A_IDS = collect_answer_token_ids("A")
-#B_IDS = collect_answer_token_ids("B")
+
 
 # ----------------------------------------------------------------------------
 # The Probability Mass function 
