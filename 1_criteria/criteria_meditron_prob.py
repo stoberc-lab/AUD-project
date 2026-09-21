@@ -35,7 +35,7 @@ except FileNotFoundError:
 # ----------------------------------------------------------------------------
 # Load the model and tokenizer
 # ----------------------------------------------------------------------------
-CACHE_PATH = "/mnt/pixstor/stoberc-lab/huggingface_cache/hub"
+CACHE_PATH = " "
 
 print(f"Loading tokenizer for {MODEL_ID} ...")
 tokenizer = AutoTokenizer.from_pretrained(
