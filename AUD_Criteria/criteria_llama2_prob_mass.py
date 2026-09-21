@@ -14,10 +14,8 @@ from tqdm import tqdm
 MODEL_ID   = "meta-llama/Llama-2-70b-hf"   
 MODEL_TAG  = "llama-2-70b-hf"              
 TEST_NAME  = "crit_first_token_1and2"
-# TEST_NAME = "crit_first_token_AandB"
 
-INPUT_XLSX = "AUD_crit_pairwise_counterbalanced_1and2_v2.xlsx"
-# INPUT_XLSX = "AUD_crit_pairwise_counterbalanced_AandB_v2.xlsx"   
+INPUT_XLSX = "AUD_crit_pairwise_counterbalanced_1and2_v2.xlsx"  
 INPUT_SHEET = "crit_pairwise_counterbalanced"
 
 OUTPUT_DIR = Path(f"outputs/{TEST_NAME}/{MODEL_TAG}")    
@@ -72,8 +70,6 @@ def collect_answer_token_ids(letter):
 print("Indexing answer tokens ...")
 A_IDS = collect_answer_token_ids("1")
 B_IDS = collect_answer_token_ids("2")
-# A_IDS = collect_answer_token_ids("A")
-# B_IDS = collect_answer_token_ids("B")
 
 # ----------------------------------------------------------------------------
 # The Probability Mass function 
