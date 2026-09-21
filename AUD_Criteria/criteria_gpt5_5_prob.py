@@ -1,35 +1,3 @@
-"""
-criteria_gpt5_5_prob_mass.py
-
-ChatGPT (gpt-5.5) arm of the AUD Diagnostic Transitivity Project, Step 1a
-(criteria-vs-criteria pairwise severity comparison).
-
-This is the OpenAI analog of criteria_llama2_prob_mass.py. Its job is the same:
-for each pairwise prompt, read the model's probability of answering "1" versus
-"2", report the normalized preference P(1) vs P(2), and report the total answer
-mass. The output CSV columns are identical to the Llama prob_mass arm so both
-arms can be analyzed with the same downstream R code.
-
-IMPORTANT METHOD DIFFERENCE vs the open-weight scripts
-------------------------------------------------------
-For Llama-2 / Meditron we run one forward pass and sum softmax mass over the
-ENTIRE vocabulary for every token id that renders as "1"/"2". The OpenAI API
-never exposes the full distribution, so here we instead:
-  * ask the model to generate one visible token,
-  * request logprobs with top_logprobs=20, and
-  * sum the probability of the answer tokens that appear in that returned
-    top-20 list, then normalize.
-For a bare "1"/"2" under a "respond with only a number" instruction, both digits
-are effectively always inside the top-20, so this reproduces the same estimator.
-The answer_mass column lets you verify per row that little or no probability
-fell outside the captured tokens (answer_mass close to 1.0 means a clean read).
-
-Also note: chat completions does not let us teacher-force a priming prefix and
-then read the continuation distribution, so there is no PRIMING_PREFIX here. The
-decision rides on the model's first generated token, which is why the prompt's
-"respond with only the number, 1 or 2" instruction is load-bearing on this arm.
-"""
-
 import os
 import json
 import math
@@ -52,47 +20,31 @@ from openai import (
 # ----------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------
-MODEL_ID  = "gpt-5.5"     # OpenAI model. Pin a dated snapshot here for a frozen,
-                          # reproducible run once you know the exact snapshot id.
-MODEL_TAG = "gpt-5.5"     # Used only for the output folder / filename / CSV "model".
-TEST_NAME = "crit_pairwise_mass"   # Same test name as the Llama prob_mass arm.
-
-INPUT_XLSX  = "AUD_crit_pairwise_counterbalanced_1and2_v2.xlsx"   # number-format file
+MODEL_ID  = "gpt-5.5"                          
+MODEL_TAG = "gpt-5.5"    
+TEST_NAME = "crit_pairwise_mass"  
+INPUT_XLSX  = "AUD_crit_pairwise_counterbalanced_1and2_v2.xlsx"   
 INPUT_SHEET = "crit_pairwise_counterbalanced"
 
 OUTPUT_DIR = Path(f"outputs/{TEST_NAME}/{MODEL_TAG}")
 OUTPUT_CSV = OUTPUT_DIR / f"{MODEL_TAG}_results.csv"
 
-# The two answer surface forms we are scoring. To make the A/B letter version,
-# change these to "A" and "B" and point INPUT_XLSX at the letter workbook.
 LEFT_LABEL  = "1"
 RIGHT_LABEL = "2"
 
-# How many alternative tokens to request at the answer position. 20 is the
-# current OpenAI maximum for top_logprobs on the chat completions endpoint.
 TOP_LOGPROBS = 5
 
-# Token budget for the completion. We only read the FIRST visible token's
-# logprobs, but gpt-5.5 can spend hidden reasoning tokens before it emits a
-# visible token. A small buffer (not 1) protects against the whole budget being
-# consumed by reasoning and returning no visible token / no logprobs.
 MAX_COMPLETION_TOKENS = 16
 
-# Optional generation controls. Set any of these to None to omit that parameter
-# entirely if the model rejects it (some GPT-5 variants only accept default
-# temperature, for example). If a call 400s naming one of these, set it to None.
-TEMPERATURE      = None    # None -> API default. Set 0.0 for greedy if accepted.
-SEED             = 12345   # For run-to-run stability where supported. None to omit.
-REASONING_EFFORT = "none"    # "minimal"/"low" to suppress reasoning if supported;
-                           # None to omit the parameter.
 
-# Simple retry policy for transient API errors.
+TEMPERATURE      = None   
+SEED             = 12345  
+REASONING_EFFORT = "none"   
+
 MAX_RETRIES   = 5
-RETRY_BACKOFF = 2.0   # base seconds; the wait doubles each attempt.
-
+RETRY_BACKOFF = 2.0   
 # ----------------------------------------------------------------------------
-# API key: read from a file first (mirrors the .hf_access_token pattern used by
-# the open-model scripts), then fall back to the OPENAI_API_KEY env variable.
+# API key: read from a file 
 # ----------------------------------------------------------------------------
 def load_api_key():
     for path in (".openai_access_token", os.path.expanduser("~/.openai_access_token")):
@@ -118,13 +70,11 @@ client = OpenAI(api_key=API_KEY)
 # One API call, with retry on transient errors only.
 # ----------------------------------------------------------------------------
 def call_model(prompt_text):
-    # Assemble the request. Optional params are only included when not None, so a
-    # model that rejects one of them still works once you set that constant to None.
     params = {
         "model": MODEL_ID,
         "messages": [{"role": "user", "content": prompt_text}],
-        "logprobs": True,               # ask for token log-probabilities
-        "top_logprobs": TOP_LOGPROBS,   # ask for the top-N alternatives per token
+        "logprobs": True,               
+        "top_logprobs": TOP_LOGPROBS,   
         "max_completion_tokens": MAX_COMPLETION_TOKENS,
     }
     if TEMPERATURE is not None:
@@ -133,9 +83,6 @@ def call_model(prompt_text):
         params["seed"] = SEED
     if REASONING_EFFORT is not None:
         params["reasoning_effort"] = REASONING_EFFORT
-
-    # Retry only on transient errors; hard errors (bad params, auth) surface
-    # immediately so you can fix them rather than silently looping.
     attempt = 0
     while True:
         try:
@@ -153,27 +100,15 @@ def call_model(prompt_text):
 # ----------------------------------------------------------------------------
 def answer_distribution(response):
     choice = response.choices[0]
-
-    # Guard: the model must have returned token-level logprobs. If logprobs came
-    # back null (unsupported model) or no visible token was emitted (budget eaten
-    # by reasoning), we cannot score this row; return NaN so it is flagged.
     if choice.logprobs is None or not choice.logprobs.content:
         return float("nan"), float("nan"), []
 
     first_token = choice.logprobs.content[0]
-
-    # Build {token_string: logprob} for the first generated position.
-    # top_logprobs holds the top-N alternatives; the sampled token is normally
-    # among them, but we add it explicitly if missing so no mass is dropped.
     dist = {}
     for alt in first_token.top_logprobs:
         dist[alt.token] = alt.logprob
     if first_token.token not in dist:
         dist[first_token.token] = first_token.logprob
-
-    # Sum probability over every surface form of each answer. OpenAI often splits
-    # a numeric/letter answer across variants such as "1" and " 1", so we compare
-    # on the stripped token text rather than requiring an exact-token match.
     p_left = 0.0
     p_right = 0.0
     for token_str, logprob in dist.items():
@@ -183,8 +118,6 @@ def answer_distribution(response):
         elif stripped == RIGHT_LABEL:
             p_right += math.exp(logprob)
 
-    # Diagnostic: atop tokens by probability, mirroring the Llama script's
-    # raw_response column so both arms are inspectable the sme way.
     top_tokens = sorted(
         ((tok, math.exp(lp)) for tok, lp in dist.items()),
         key=lambda x: x[1],
@@ -197,11 +130,11 @@ def format_raw_response(top_tokens):
     return "; ".join(parts)
 
 # ----------------------------------------------------------------------------
-# Main execution loop (resume-safe; identical CSV schema to the Llama arm).
-# ----------------------------------------------------------------------------
+# Main execution loop 
+# --------------------------------------------------------------------------------------------------------------------------------------
+
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# Resume support: skip any task_id already present in the output CSV.
 already_done = set()
 if OUTPUT_CSV.exists():
     prior = pd.read_csv(OUTPUT_CSV, dtype=str)
@@ -244,7 +177,6 @@ for _, task in tqdm(tasks.iterrows(), total=len(tasks)):
         else:
             left_probability = right_probability = float("nan")
 
-    # Quality flag surfaced during the run so bad rows are noticed immediately.
     if math.isnan(answer_mass):
         print(f"  [WARN] {task['task_id']}: no usable logprobs returned.")
     elif answer_mass < 0.5:
