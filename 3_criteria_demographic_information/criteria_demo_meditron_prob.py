@@ -57,7 +57,7 @@ model = AutoModelForCausalLM.from_pretrained(
 model.eval()
 
 # ----------------------------------------------------------------------------
-# Precompute "A" and "B" token IDs
+# Precompute "1" and "2" token IDs
 # ----------------------------------------------------------------------------
 def collect_answer_token_ids(letter):
     ids = []
