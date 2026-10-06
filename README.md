@@ -1,3 +1,3 @@
 # AUD-project
 
-Charlie's Summer 2026 MU Arts project. Examining if LLMs (1) rank the 11 AUD DSM-5 symptoms in likelihood of AUD risk in line w/ epidemiological data, (2) rank demographic information (gender, sexuality, race) in likelihood of AUD risk in line w/ epidemiological data, and (3) if these rankings change when symptoms + demographic information are combined.
+Data and code used to generate prompts and reproduce the analyses of the paper "Evaluating Large Language Models on Clinical Risk Judgement: An Example from Alcohol Use Disorder". Preprint can be found on OSF.
